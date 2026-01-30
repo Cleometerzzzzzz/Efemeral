@@ -2,13 +2,13 @@
 
 # Efemeral by Cleo. A P2P CLI chat that attempts to emulate the IRC days of yore, entirely within your command line!
 #
-# You may not copy this code for any reason. This is not because you are forbidden from doing so. It's because my code fucking sucks.
+# You may not copy this code for any reason. This is not because you are forbidden from doing so.
+# It's because my code fucking sucks.
 #
 # Issues:
 #         - nickserv is totally broken. no clue what's causing it.
-
-
-
+#         - NAT is a bitch and will continue to be a bitch.
+#         - still no idea what i'm doing.
 
 import socket
 import threading
@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 
 BUFFER = 2048
 
-clients = {}            # sock -> client
+clients = {}            # sock -> Client
 nicks = {}              # nick -> sock
 nickserv = {}           # nick -> password
 bans = set()            # endpoint strings
@@ -28,6 +28,7 @@ invites = {}            # token -> Invite
 motd = ""
 host_assigned = False
 lock = threading.Lock()
+
 
 # data shit
 class Client:
@@ -74,13 +75,38 @@ def redraw(msg):
 
 
 def fmt(text):
+    # extremely fake markdown because i'm lazy
     text = text.replace("*", "\033[1m*\033[0m")
     text = text.replace("_", "\033[3m_\033[0m")
     return text
 
 
+def get_public_ip():
+    """
+    best-effort public IP detection using stdlib only.
+    does not send packets, just abuses routing tables.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except:
+        return None
+    finally:
+        s.close()
+
+
+def advertised_host(bind_host):
+    # never advertise garbage like 0.0.0.0 or localhost
+    if bind_host in ("0.0.0.0", "127.0.0.1", "localhost", None):
+        ip = get_public_ip()
+        return ip if ip else bind_host
+    return bind_host
+
+
 # cmds
-# note: this is the shittiest code i have ever written. Likely none of these work. Just comment these out if you don't want to use them.
+# note: this is the shittiest code i have ever written.
+# Likely none of these work. Just comment these out if you don't want to use them.
 
 def require_op(c):
     return c.is_trusted
@@ -97,14 +123,14 @@ def cmd_nick(c, args):
         send(c.sock, "* Nick already in use.")
         return
     old = c.nick
-    del nicks[old]
+    nicks.pop(old, None)
     c.nick = new
     nicks[new] = c.sock
     broadcast(f"* {old} is now known as {new}")
 
 
 def cmd_elevate(c, args):
-    if not c.is_host:
+    if not c.is_host or not args:
         return
     t = clients.get(nicks.get(args[0]))
     if t:
@@ -113,7 +139,7 @@ def cmd_elevate(c, args):
 
 
 def cmd_kick(c, args):
-    if not require_op(c):
+    if not require_op(c) or not args:
         return
     t = clients.get(nicks.get(args[0]))
     if t:
@@ -122,7 +148,7 @@ def cmd_kick(c, args):
 
 
 def cmd_ban(c, args):
-    if not require_op(c):
+    if not require_op(c) or not args:
         return
     t = clients.get(nicks.get(args[0]))
     if t:
@@ -132,6 +158,8 @@ def cmd_ban(c, args):
 
 
 def cmd_whois(c, args):
+    if not args:
+        return
     t = clients.get(nicks.get(args[0]))
     if not t:
         return
@@ -149,21 +177,21 @@ def cmd_motd(c, args):
 
 
 def cmd_nickserv(c, args):
-    if not require_op(c):
+    if not require_op(c) or len(args) < 2:
         return
     nickserv[args[0]] = args[1]
     broadcast(f"* Nick {args[0]} registered")
 
 
 def cmd_unservenick(c, args):
-    if not require_op(c):
+    if not require_op(c) or not args:
         return
     nickserv.pop(args[0], None)
     broadcast(f"* Nick {args[0]} deregistered")
 
 
 def cmd_customlink(c, args):
-    if not require_op(c):
+    if not require_op(c) or len(args) < 2:
         return
     uses = int(args[0])
     secs = int(args[1])
@@ -202,7 +230,7 @@ def handle_client(sock, addr, is_host):
 
     broadcast(f"* {c.nick} joined ({'HOST' if c.is_host else 'PEER'})")
 
-    while True: # when i recieve a message, check if it's a command'
+    while True:  # when i recieve a message, check if it's a command'
         try:
             msg = sock.recv(BUFFER).decode().strip()
             if not msg:
@@ -228,14 +256,17 @@ def handle_client(sock, addr, is_host):
     sock.close()
 
 
-def start_server(host, port): # make sure the host is trusted when they make the instance
+def start_server(host, port):
+    # make sure the host is trusted when they make the instance
     global host_assigned
+
     srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((host, port))
     srv.listen()
 
     def loop():
-        global host_assigned 
+        global host_assigned
         while True:
             s, a = srv.accept()
             is_host = False
@@ -286,11 +317,10 @@ def connect(host, port, nick):
 
 
 # initialization
-
 def main():
     ap = argparse.ArgumentParser("efemeral_cli")
-    ap.add_argument("--host")
-    ap.add_argument("--port", type=int)
+    ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--port", type=int, required=True)
     ap.add_argument("--passphrase")
     ap.add_argument("--nick", required=True)
     ap.add_argument("--link")
@@ -303,11 +333,14 @@ def main():
         return
 
     start_server(args.host, args.port)
+
+    public_host = advertised_host(args.host)
+
     print("efemeral instance started")
-    print(f"efemeral://{args.host}:{args.port}/{args.passphrase}")
+    print(f"efemeral://{public_host}:{args.port}/{args.passphrase}")
+
     connect(args.host, args.port, args.nick)
 
 
 if __name__ == "__main__":
     main()
-
