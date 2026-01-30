@@ -1,4 +1,4 @@
-#Efemeral
+# Efemeral
 Single-file IRC-style P2P CLI chat.
 IP-based, no encryption.
 Made on Linux Mint. Probably won’t work on Windows.
