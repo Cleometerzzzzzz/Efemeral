@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+
+# Efemeral by Cleo. A P2P CLI chat that attempts to emulate the IRC days of yore, entirely within your command line!
+#
+# You may not copy this code for any reason. This is not because you are forbidden from doing so. It's because my code fucking sucks.
+#
+# Issues:
+#         - nickserv is totally broken. no clue what's causing it.
+
+
+
+
+import socket
+import threading
+import argparse
+import sys
+import time
+import uuid
+from urllib.parse import urlparse
+
+BUFFER = 2048
+
+clients = {}            # sock -> client
+nicks = {}              # nick -> sock
+nickserv = {}           # nick -> password
+bans = set()            # endpoint strings
+invites = {}            # token -> Invite
+motd = ""
+host_assigned = False
+lock = threading.Lock()
+
+# data shit
+class Client:
+    def __init__(self, sock, addr, is_host=False):
+        self.sock = sock
+        self.endpoint = f"{addr[0]}:{addr[1]}"
+        self.nick = self.endpoint
+        self.is_host = is_host
+        self.is_trusted = is_host
+        self.joined = time.time()
+        self.color = "\033[33m" if is_host else "\033[36m"  # gold / cyan
+
+
+class Invite:
+    def __init__(self, uses, expires):
+        self.uses = uses
+        self.expires = expires
+
+
+# utils
+def now():
+    return int(time.time())
+
+
+def send(sock, msg):
+    try:
+        sock.send((msg + "\n").encode())
+    except:
+        pass
+
+
+def broadcast(msg, exclude=None):
+    for c in list(clients.values()):
+        if c.sock != exclude:
+            send(c.sock, msg)
+
+
+def redraw(msg):
+    # wipe input line, print message, fresh prompt
+    sys.stdout.write("\r\033[K")
+    sys.stdout.write(msg + "\n")
+    sys.stdout.write("> ")
+    sys.stdout.flush()
+
+
+def fmt(text):
+    text = text.replace("*", "\033[1m*\033[0m")
+    text = text.replace("_", "\033[3m_\033[0m")
+    return text
+
+
+# cmds
+# note: this is the shittiest code i have ever written. Likely none of these work. Just comment these out if you don't want to use them.
+
+def require_op(c):
+    return c.is_trusted
+
+
+def cmd_nick(c, args):
+    if not args:
+        return
+    new = args[0]
+    if new in nickserv:
+        send(c.sock, "* Nick is registered.")
+        return
+    if new in nicks:
+        send(c.sock, "* Nick already in use.")
+        return
+    old = c.nick
+    del nicks[old]
+    c.nick = new
+    nicks[new] = c.sock
+    broadcast(f"* {old} is now known as {new}")
+
+
+def cmd_elevate(c, args):
+    if not c.is_host:
+        return
+    t = clients.get(nicks.get(args[0]))
+    if t:
+        t.is_trusted = True
+        broadcast(f"* {t.nick} has been elevated")
+
+
+def cmd_kick(c, args):
+    if not require_op(c):
+        return
+    t = clients.get(nicks.get(args[0]))
+    if t:
+        send(t.sock, "* You were kicked")
+        t.sock.close()
+
+
+def cmd_ban(c, args):
+    if not require_op(c):
+        return
+    t = clients.get(nicks.get(args[0]))
+    if t:
+        bans.add(t.endpoint)
+        send(t.sock, "* You were banned")
+        t.sock.close()
+
+
+def cmd_whois(c, args):
+    t = clients.get(nicks.get(args[0]))
+    if not t:
+        return
+    uptime = now() - int(t.joined)
+    role = "HOST" if t.is_host else "OP" if t.is_trusted else "PEER"
+    send(c.sock, f"* {t.nick} | {t.endpoint} | {uptime}s | {role}")
+
+
+def cmd_motd(c, args):
+    global motd
+    if not require_op(c):
+        return
+    motd = " ".join(args)
+    broadcast(f"* MOTD set: {motd}")
+
+
+def cmd_nickserv(c, args):
+    if not require_op(c):
+        return
+    nickserv[args[0]] = args[1]
+    broadcast(f"* Nick {args[0]} registered")
+
+
+def cmd_unservenick(c, args):
+    if not require_op(c):
+        return
+    nickserv.pop(args[0], None)
+    broadcast(f"* Nick {args[0]} deregistered")
+
+
+def cmd_customlink(c, args):
+    if not require_op(c):
+        return
+    uses = int(args[0])
+    secs = int(args[1])
+    token = uuid.uuid4().hex[:8]
+    invites[token] = Invite(uses, now() + secs)
+    send(c.sock, f"* Invite: efemeral://host/{token}")
+
+
+COMMANDS = {
+    "nick": cmd_nick,
+    "elevate": cmd_elevate,
+    "kick": cmd_kick,
+    "ban": cmd_ban,
+    "whois": cmd_whois,
+    "motd": cmd_motd,
+    "nickserv": cmd_nickserv,
+    "unservenick": cmd_unservenick,
+    "customlink": cmd_customlink,
+}
+
+
+# when i'm the server
+def handle_client(sock, addr, is_host):
+    c = Client(sock, addr, is_host)
+
+    if c.endpoint in bans:
+        sock.close()
+        return
+
+    with lock:
+        clients[sock] = c
+        nicks[c.nick] = sock
+
+    if motd:
+        send(sock, f"* MOTD: {motd}")
+
+    broadcast(f"* {c.nick} joined ({'HOST' if c.is_host else 'PEER'})")
+
+    while True: # when i recieve a message, check if it's a command'
+        try:
+            msg = sock.recv(BUFFER).decode().strip()
+            if not msg:
+                break
+
+            if msg.startswith("?"):
+                parts = msg[1:].split()
+                cmd = COMMANDS.get(parts[0])
+                if cmd:
+                    cmd(c, parts[1:])
+                continue
+
+            broadcast(f"{c.color}[{c.nick}]\033[0m {fmt(msg)}")
+
+        except:
+            break
+
+    with lock:
+        clients.pop(sock, None)
+        nicks.pop(c.nick, None)
+
+    broadcast(f"* {c.nick} left")
+    sock.close()
+
+
+def start_server(host, port): # make sure the host is trusted when they make the instance
+    global host_assigned
+    srv = socket.socket()
+    srv.bind((host, port))
+    srv.listen()
+
+    def loop():
+        global host_assigned 
+        while True:
+            s, a = srv.accept()
+            is_host = False
+            if not host_assigned:
+                is_host = True
+                host_assigned = True
+            threading.Thread(
+                target=handle_client,
+                args=(s, a, is_host),
+                daemon=True
+            ).start()
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
+# when i'm the client
+def listen(sock):
+    while True:
+        try:
+            msg = sock.recv(BUFFER).decode()
+            if not msg:
+                break
+            redraw(msg.strip())
+        except:
+            break
+
+
+def input_loop(sock):
+    while True:
+        try:
+            msg = input("> ")
+            sock.send(msg.encode())
+
+            # clear echoed input immediately
+            sys.stdout.write("\r\033[K")
+            sys.stdout.flush()
+
+        except:
+            break
+
+
+def connect(host, port, nick):
+    s = socket.socket()
+    s.connect((host, port))
+    threading.Thread(target=listen, args=(s,), daemon=True).start()
+    s.send(f"?nick {nick}".encode())
+    input_loop(s)
+
+
+# initialization
+
+def main():
+    ap = argparse.ArgumentParser("efemeral_cli")
+    ap.add_argument("--host")
+    ap.add_argument("--port", type=int)
+    ap.add_argument("--passphrase")
+    ap.add_argument("--nick", required=True)
+    ap.add_argument("--link")
+    args = ap.parse_args()
+
+    if args.link:
+        u = urlparse(args.link)
+        host, port = u.netloc.split(":")
+        connect(host, int(port), args.nick)
+        return
+
+    start_server(args.host, args.port)
+    print("efemeral instance started")
+    print(f"efemeral://{args.host}:{args.port}/{args.passphrase}")
+    connect(args.host, args.port, args.nick)
+
+
+if __name__ == "__main__":
+    main()
+
