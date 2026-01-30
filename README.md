@@ -1,6 +1,7 @@
-# Efemeral
-An IRC-style peer-to-peer Command Line Chat that's lightweight and heavily customizable.
-Uses IP for now; i couldn't figure out how to implement I2p. It's not end-to-end encrypted, so be warned.
+#Efemeral
+Single-file IRC-style P2P CLI chat.
+IP-based, no encryption.
+Made on Linux Mint. Probably won’t work on Windows.
 
 I know it's bad. It was made by a beginner. what do you expect?
 
