@@ -16,3 +16,10 @@ To close the instance, close the command line.
 
 
 To join an instance, you need the instance link, and the port. The host should tell you what port they're using. Run ``efemeral_cli --link <LINK> --port <PORT>`` and optionally ``--nick <NICK>``. If you do not specify a nickname, it will default to your endpoint. You can change your nick at any time with ?nick.
+
+
+
+CC-BY-SA 4.0
+See LICENSE for more details.
+
+The comment in efemeral_cli.py is a joke; disregard it. 
