@@ -23,3 +23,6 @@ CC-BY-SA 4.0
 See LICENSE for more details.
 
 The comment in efemeral_cli.py is a joke; disregard it. 
+
+
+<img width="485" height="712" alt="image" src="https://github.com/user-attachments/assets/5e65be05-8617-44c7-bc57-07d112de0d89" />
