@@ -14,7 +14,7 @@ For most users, 0.0.0.0 is what you'll use for host. it'll accept connections fr
 When you open an instance, you'll be given a link. The link will look something like ``efemeral://<host>:<port>/<passphrase>`` and is needed for anybody to join your instance. Anybody you want to join will also need the port you used to launch the instance in order to connect. Since this is encoded in the link, i'll add a feature to automate this in the future, but for now you'll need to tell them this, too.
 
 When in an instance as the host, you can ?kick users. ?ban also works, but currently there's no distinction. ``?kick <nick>``
-To close the instance, close the command line.
+To close the instance, close the command line, or interrupt with ctrl C.
 
 You can use ?color <hex> to change the color of your nick. 
 
